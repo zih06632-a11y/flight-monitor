@@ -71,7 +71,8 @@ def baseline(route_key, day, days=3, now=None):
     con = connect()
     cutoff = (now or 0) - days * 86400
     rows = con.execute(
-        "SELECT price FROM offers WHERE route=? AND day=? AND stops=0 AND ts>=? ORDER BY price",
+        "SELECT price FROM offers WHERE route=? AND day=? AND stops=0 AND platform!='selftest'"
+        " AND ts>=? ORDER BY price",
         (route_key, day, cutoff)).fetchall()
     con.close()
     prices = [r[0] for r in rows]

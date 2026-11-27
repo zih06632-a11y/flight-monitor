@@ -284,8 +284,8 @@ def main():
         offers, failures = [], []
 
         if args.fake:
+            # selftest must never touch the production database: it would poison the baseline
             offers = [cbase.validate(o) for o in fake_offers()]
-            store.record_run(ts, route["key"], "selftest", True, len(offers))
         else:
             payload = {"from_city": route["from"], "to_city": route["to"],
                        "from_codes": route["from_codes"], "to_codes": route["to_codes"],
@@ -324,7 +324,7 @@ def main():
                 excluded.append((offer, eff, "；".join(reasons)))
             else:
                 rows.append((offer, eff))
-        if rows:
+        if rows and not args.fake:
             store.add_offers(ts, route["key"], route["date"], rows)
 
         links = []
@@ -346,7 +346,7 @@ def main():
             route["key"], route["from"], route["to"], len(offers), len(rows), len(excluded),
             len(failures), ("¥%s" % best[1]) if best else "-"))
 
-        if best and reasons and not args.no_notify:
+        if best and reasons and not args.no_notify and not args.fake:
             offer, eff = best
             key = "%s:%s:%s:%s" % (route["key"], route["date"], offer["flight_no"], eff)
             if store.alerted_recently(key, cfg["rule"]["notify_cooldown_hours"], ts):
@@ -364,7 +364,7 @@ def main():
     head = ["# 机票监测报告", "", "生成时间：%s" % time.strftime("%Y-%m-%d %H:%M:%S"),
             "监测航线数：%s" % len(routes), ""]
     path = os.path.join(REPORT_DIR, "latest.md")
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8-sig") as f:
         f.write("\n".join(head + sections) + "\n")
     print("report: %s" % path)
     for line in summary:
