@@ -1,5 +1,7 @@
 # flight-monitor
 
+[![ci](https://github.com/zih06632-a11y/flight-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/zih06632-a11y/flight-monitor/actions/workflows/ci.yml)
+
 任意航线、任意日期的机票价格监测：按**含税总价**比价，剔除阴间时段，价格合适时弹通知。
 
 不是某个固定航线的脚本——换城市、换日期、同时盯多条线都只改一个参数。
