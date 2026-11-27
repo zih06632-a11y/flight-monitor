@@ -15,7 +15,13 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
     cfg = json.load(f)
-offers = mod.fetch(date, cfg["route"])
+route = dict(cfg.get("routes", [{}])[0])
+route.setdefault("from_city", route.get("from"))
+route.setdefault("to_city", route.get("to"))
+import cities as _cities
+route.setdefault("from_codes", _cities.resolve(route.get("from", ""), route.get("from_code")))
+route.setdefault("to_codes", _cities.resolve(route.get("to", ""), route.get("to_code")))
+offers = mod.fetch(date, route)
 print("raw offers:", len(offers))
 ok = []
 for o in offers:

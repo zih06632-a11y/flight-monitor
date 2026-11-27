@@ -1,4 +1,9 @@
-"""One monitoring cycle: collect -> normalize -> filter -> store -> evaluate -> report -> notify."""
+"""One monitoring cycle: collect -> normalize -> filter -> store -> evaluate -> report -> notify.
+
+Works for any route:  python run_cycle.py --from 上海 --to 海口 --date 2026-12-16
+or for everything listed in config.json route(s):
+  python run_cycle.py
+"""
 import argparse
 import importlib.util
 import json
@@ -10,8 +15,14 @@ import threading
 import time
 import traceback
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import cities  # noqa: E402
 import store  # noqa: E402
 from collectors import base as cbase  # noqa: E402
 
@@ -69,8 +80,40 @@ def hhmm(text):
         return None
 
 
+def build_routes(cfg, args):
+    if args.frm or args.to:
+        if not (args.frm and args.to and args.date):
+            raise SystemExit("--from/--to require --date as well")
+        raw = [{"from": args.frm, "to": args.to, "date": args.date,
+                "from_code": args.from_code, "to_code": args.to_code}]
+    else:
+        raw = list(cfg.get("routes") or ([cfg["route"]] if "route" in cfg else []))
+        if args.date:
+            for r in raw:
+                r["date"] = args.date
+    if not raw:
+        raise SystemExit("no route configured: pass --from/--to/--date or add routes[] to config.json")
+
+    routes = []
+    for r in raw:
+        try:
+            from_codes = cities.resolve(r.get("from", ""), r.get("from_code"))
+            to_codes = cities.resolve(r.get("to", ""), r.get("to_code"))
+        except KeyError as exc:
+            raise SystemExit(str(exc).strip('"'))
+        routes.append({
+            "from": r.get("from") or from_codes[0],
+            "to": r.get("to") or to_codes[0],
+            "date": str(r["date"]),
+            "from_codes": from_codes,
+            "to_codes": to_codes,
+            "key": "%s-%s" % (from_codes[0], to_codes[0]),
+        })
+    return routes
+
+
 def reject_reasons(offer, cfg):
-    """Empty list = the offer is bookable under the user's stated preferences."""
+    """Empty list = bookable under the stated preferences."""
     reasons = []
     f = cfg["filters"]
     if f.get("require_direct", True) and int(offer["stops"]) != 0:
@@ -86,21 +129,21 @@ def reject_reasons(offer, cfg):
     return reasons
 
 
-def fake_offers(platform="selftest"):
+def fake_offers():
     return [
-        {"platform": platform, "flight_no": "MU5305", "airline": "东方航空", "dep_time": "07:35",
+        {"platform": "selftest", "flight_no": "MU5305", "airline": "东方航空", "dep_time": "07:35",
          "arr_time": "10:50", "from_airport": "虹桥T2", "to_airport": "美兰T1",
          "price": 620, "price_base": 550, "fees_included": True, "baggage": "含20kg托运",
          "stops": 0, "url": "https://example.invalid/a", "note": "selftest"},
-        {"platform": platform, "flight_no": "HU7602", "airline": "海南航空", "dep_time": "12:20",
+        {"platform": "selftest", "flight_no": "HU7602", "airline": "海南航空", "dep_time": "12:20",
          "arr_time": "15:40", "from_airport": "浦东T1", "to_airport": "美兰T1",
          "price": 545, "price_base": 545, "fees_included": False, "baggage": "含20kg托运",
          "stops": 0, "url": "https://example.invalid/b", "note": "selftest 标价不含税"},
-        {"platform": platform, "flight_no": "9C8801", "airline": "春秋航空", "dep_time": "05:40",
+        {"platform": "selftest", "flight_no": "9C8801", "airline": "春秋航空", "dep_time": "05:40",
          "arr_time": "09:10", "from_airport": "浦东T2", "to_airport": "美兰T1",
          "price": 399, "baggage": "无免费托运",
          "stops": 0, "url": "https://example.invalid/c", "note": "selftest 阴间时段"},
-        {"platform": platform, "flight_no": "CZ3510", "airline": "南方航空", "dep_time": "09:10",
+        {"platform": "selftest", "flight_no": "CZ3510", "airline": "南方航空", "dep_time": "09:10",
          "arr_time": "14:20", "from_airport": "虹桥T2", "to_airport": "美兰T1",
          "price": 480, "stops": 1, "url": "https://example.invalid/d", "note": "selftest 经停"},
     ]
@@ -123,60 +166,58 @@ def evaluate(rows, base, cfg):
     return (offer, eff), reasons
 
 
-def write_report(day, route, rows, excluded, base, best, reasons, failures, cfg):
-    os.makedirs(REPORT_DIR, exist_ok=True)
+def route_section(route, rows, excluded, base, best, reasons, failures, cfg, links=None):
     lo, hi = cfg["filters"]["dep_time_window"]
     lines = [
-        "# %s → %s  %s" % (route["from_city"], route["to_city"], day),
+        "## %s → %s  %s  `%s`" % (route["from"], route["to"], route["date"], route["key"]),
         "",
-        "生成时间：%s" % time.strftime("%Y-%m-%d %H:%M:%S"),
-        "价格口径：**含机建+燃油的实付总价**；默认不买保险、不买付费行李、不选座。",
-        "筛选口径：直飞 + 起飞时间 %s–%s。" % (lo, hi),
-        "历史基线（%s 个样本）：最低 ¥%s / p10 ¥%s / 中位 ¥%s" % (
+        "机场三字码：%s → %s" % ("/".join(route["from_codes"]), "/".join(route["to_codes"])),
+        "筛选：直飞 + 起飞 %s–%s；口径：含机建+燃油，不含保险/行李/选座" % (lo, hi),
+        "历史基线（%s 样本）：最低 ¥%s / p10 ¥%s / 中位 ¥%s" % (
             base["count"], base["min"], base["p10"], base["median"]),
         "",
     ]
     if best:
         offer, eff = best
-        lines.append("**当前最低可订：¥%s（含税） %s %s-%s %s→%s**" % (
+        lines.append("**最低可订：¥%s（含税） %s %s-%s %s→%s**" % (
             eff, offer["flight_no"], offer["dep_time"], offer["arr_time"],
             offer["from_airport"], offer["to_airport"]))
         if offer.get("price_base") and int(offer["price_base"]) != eff:
-            lines.append("（页面标价 ¥%s，税费差额已计入）" % offer["price_base"])
+            lines.append("（页面标价 ¥%s，税费已补算）" % offer["price_base"])
         if reasons:
-            lines.append("触发原因：" + "；".join(reasons))
+            lines.append("触发：" + "；".join(reasons))
     elif rows:
         lines.append("**本轮没有符合筛选条件的航班。**")
     if failures:
-        lines += ["", "## 采集失败", ""]
-        lines += ["- %s: %s" % (p, e.strip().splitlines()[-1][:160]) for p, e in failures]
-    lines += ["", "## 可订报价（含税总价升序）", "",
-              "| 平台 | 航班 | 起飞-到达 | 机场 | 标价 | 含税总价 | 行李 | 备注 |",
-              "|---|---|---|---|---|---|---|---|"]
-    for offer, eff in sorted(rows, key=lambda r: r[1]):
-        base_price = offer.get("price_base")
-        if base_price is None or int(base_price) == eff:
-            base_txt = "—"
-        else:
-            base_txt = "¥%s" % base_price
-        lines.append("| %s | %s | %s-%s | %s→%s | %s | ¥%s | %s | %s |" % (
-            offer["platform"], offer["flight_no"], offer["dep_time"], offer["arr_time"],
-            offer["from_airport"], offer["to_airport"], base_txt, eff,
-            offer.get("baggage") or "—", offer.get("note", "")))
+        lines += ["", "采集失败："] + ["- %s: %s" % (p, e.strip().splitlines()[-1][:150]) for p, e in failures]
+    if rows:
+        lines += ["", "| 平台 | 航班 | 起飞-到达 | 机场 | 标价 | 含税总价 | 行李 | 备注 |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for offer, eff in sorted(rows, key=lambda r: r[1]):
+            pb = offer.get("price_base")
+            base_txt = "—" if (pb is None or int(pb) == eff) else "¥%s" % pb
+            lines.append("| %s | %s | %s-%s | %s→%s | %s | ¥%s | %s | %s |" % (
+                offer["platform"], offer["flight_no"], offer["dep_time"], offer["arr_time"],
+                offer["from_airport"], offer["to_airport"], base_txt, eff,
+                offer.get("baggage") or "—", offer.get("note", "")))
     if excluded:
-        lines += ["", "## 已剔除（不符合你的筛选口径）", "",
-                  "| 平台 | 航班 | 起飞 | 含税总价 | 剔除原因 |", "|---|---|---|---|---|"]
+        lines += ["", "已剔除：", "", "| 平台 | 航班 | 起飞 | 含税总价 | 原因 |", "|---|---|---|---|---|"]
         for offer, eff, reason in sorted(excluded, key=lambda r: r[1]):
             lines.append("| %s | %s | %s | ¥%s | %s |" % (
                 offer["platform"], offer["flight_no"], offer["dep_time"], eff, reason))
-    path = os.path.join(REPORT_DIR, "latest.md")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    return path
+    if links:
+        lines += ["", "### 人工核价链接（自动化抓不到的渠道）", ""]
+        for name, reason, url in links:
+            lines.append("- **%s** — %s（人类浏览器可正常打开）: %s" % (name, reason, url))
+    lines.append("")
+    return lines
 
 
 def notify(title, message):
     script = os.path.join(HERE, "notify.ps1")
+    if os.name != "nt" or not os.path.exists(script):
+        print("[alert] %s | %s" % (title, message))
+        return
     try:
         subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
                         "-Title", title, "-Message", message], timeout=30, check=False,
@@ -186,71 +227,109 @@ def notify(title, message):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default=None)
-    ap.add_argument("--fake", action="store_true")
+    ap = argparse.ArgumentParser(description="Flight price monitor (all-in price, direct only)")
+    ap.add_argument("--from", dest="frm", help="departure city, e.g. 上海")
+    ap.add_argument("--to", dest="to", help="arrival city, e.g. 海口")
+    ap.add_argument("--date", help="departure date YYYY-MM-DD (applies to every route)")
+    ap.add_argument("--from-code", dest="from_code", help="IATA code if the city is unknown")
+    ap.add_argument("--to-code", dest="to_code", help="IATA code if the city is unknown")
+    ap.add_argument("--fake", action="store_true", help="selftest with built-in offers")
     ap.add_argument("--no-notify", action="store_true")
     ap.add_argument("--timeout", type=int, default=110)
     args = ap.parse_args()
 
     cfg = load_config()
-    route = dict(cfg["route"])
-    day = args.date or route["date"]
-    ts = int(time.time())
+    routes = build_routes(cfg, args)
     fees_cfg = cfg["fees"]
+    ts = int(time.time())
 
-    base = store.baseline(day, cfg["rule"]["baseline_days"], now=ts)
-
-    offers, failures = [], []
     if args.fake:
-        offers = [cbase.validate(o) for o in fake_offers()]
-        store.record_run(ts, "selftest", True, len(offers))
+        collectors = []
     else:
         collectors = discover_collectors()
         print("collectors: %s" % [p for p, _ in collectors])
-        for platform, mod in collectors:
+
+    sections, alerts, summary = [], [], []
+
+    for route in routes:
+        base = store.baseline(route["key"], route["date"], cfg["rule"]["baseline_days"], now=ts)
+        offers, failures = [], []
+
+        if args.fake:
+            offers = [cbase.validate(o) for o in fake_offers()]
+            store.record_run(ts, route["key"], "selftest", True, len(offers))
+        else:
+            payload = {"from_city": route["from"], "to_city": route["to"],
+                       "from_codes": route["from_codes"], "to_codes": route["to_codes"],
+                       "date": route["date"]}
+            for platform, mod in collectors:
+                try:
+                    result = run_with_timeout(mod.fetch, (route["date"], payload), args.timeout)
+                    good = [cbase.validate(dict(o, platform=o.get("platform") or platform))
+                            for o in result]
+                    offers.extend(good)
+                    store.record_run(ts, route["key"], platform, True, len(good))
+                    print("[ok]   %s %s: %d offers" % (route["key"], platform, len(good)))
+                except Exception as exc:
+                    failures.append((platform, str(exc)))
+                    store.record_run(ts, route["key"], platform, False, 0, str(exc))
+                    print("[fail] %s %s: %s" % (route["key"], platform, str(exc).splitlines()[0][:130]))
+
+        rows, excluded = [], []
+        for offer in offers:
+            eff = cbase.total_price(offer, fees_cfg)
+            reasons = reject_reasons(offer, cfg)
+            if reasons:
+                excluded.append((offer, eff, "；".join(reasons)))
+            else:
+                rows.append((offer, eff))
+        if rows:
+            store.add_offers(ts, route["key"], route["date"], rows)
+
+        links = []
+        for item in cfg.get("manual_links", []):
             try:
-                result = run_with_timeout(mod.fetch, (day, route), args.timeout)
-                good = [cbase.validate(dict(o, platform=o.get("platform") or platform)) for o in result]
-                offers.extend(good)
-                store.record_run(ts, platform, True, len(good))
-                print("[ok]   %s: %d offers" % (platform, len(good)))
-            except Exception as exc:
-                failures.append((platform, str(exc)))
-                store.record_run(ts, platform, False, 0, str(exc))
-                print("[fail] %s: %s" % (platform, str(exc).splitlines()[0][:140]))
+                url = item["url"].format(from_code=route["from_codes"][0],
+                                          to_code=route["to_codes"][0],
+                                          from_code_lc=route["from_codes"][0].lower(),
+                                          to_code_lc=route["to_codes"][0].lower(),
+                                          date=route["date"],
+                                          from_name=route["from"], to_name=route["to"])
+            except Exception:
+                continue
+            links.append((item.get("name", "?"), item.get("reason", ""), url))
 
-    rows, excluded = [], []
-    for offer in offers:
-        eff = cbase.total_price(offer, fees_cfg)
-        reasons = reject_reasons(offer, cfg)
-        if reasons:
-            excluded.append((offer, eff, "；".join(reasons)))
-        else:
-            rows.append((offer, eff))
+        best, reasons = evaluate(rows, base, cfg)
+        sections += route_section(route, rows, excluded, base, best, reasons, failures, cfg, links)
+        summary.append("%s %s→%s offers=%d eligible=%d excluded=%d failures=%d best=%s" % (
+            route["key"], route["from"], route["to"], len(offers), len(rows), len(excluded),
+            len(failures), ("¥%s" % best[1]) if best else "-"))
 
-    if rows:
-        store.add_offers(ts, day, rows)
+        if best and reasons and not args.no_notify:
+            offer, eff = best
+            key = "%s:%s:%s:%s" % (route["key"], route["date"], offer["flight_no"], eff)
+            if store.alerted_recently(key, cfg["rule"]["notify_cooldown_hours"], ts):
+                print("alert suppressed by cooldown")
+            else:
+                message = "¥%s 含税 %s %s-%s %s→%s｜%s｜不含保险与托运行李" % (
+                    eff, offer["flight_no"], offer["dep_time"], offer["arr_time"],
+                    offer["from_airport"], offer["to_airport"], "；".join(reasons))
+                title = "机票提醒 %s→%s %s" % (route["from"], route["to"], route["date"])
+                notify(title, message)
+                store.mark_alert(ts, key, eff, message)
+                alerts.append(message)
 
-    best, reasons = evaluate(rows, base, cfg)
-    report = write_report(day, route, rows, excluded, base, best, reasons, failures, cfg)
-    print("report: %s" % report)
-
-    if best and reasons and not args.no_notify:
-        offer, eff = best
-        key = "%s:%s:%s" % (day, offer["flight_no"], eff)
-        if store.alerted_recently(key, cfg["rule"]["notify_cooldown_hours"], ts):
-            print("alert suppressed by cooldown")
-        else:
-            message = "¥%s 含税 %s %s-%s %s→%s｜%s｜不含保险与托运行李" % (
-                eff, offer["flight_no"], offer["dep_time"], offer["arr_time"],
-                offer["from_airport"], offer["to_airport"], "；".join(reasons))
-            notify("机票提醒 %s→%s %s" % (route["from_city"], route["to_city"], day), message)
-            store.mark_alert(ts, key, eff, message)
-            print("alert sent: " + message)
-
-    print("offers=%d eligible=%d excluded=%d failures=%d base=%s"
-          % (len(offers), len(rows), len(excluded), len(failures), base))
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    head = ["# 机票监测报告", "", "生成时间：%s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+            "监测航线数：%s" % len(routes), ""]
+    path = os.path.join(REPORT_DIR, "latest.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(head + sections) + "\n")
+    print("report: %s" % path)
+    for line in summary:
+        print(line)
+    for a in alerts:
+        print("alert sent: " + a)
     return 0
 
 

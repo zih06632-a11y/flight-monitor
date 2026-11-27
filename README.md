@@ -1,90 +1,142 @@
 # flight-monitor
 
-上海 → 海口 机票价格监测 + 可复用订票 SOP。抓多个平台、按**含税总价**比价、在价格合适时弹 Windows 通知。
+任意航线、任意日期的机票价格监测：按**含税总价**比价，剔除阴间时段，价格合适时弹通知。
 
-## 它解决什么
+不是某个固定航线的脚本——换城市、换日期、同时盯多条线都只改一个参数。
 
-人工比价有三个坑：列表页标价不含机建燃油、便宜票常在凌晨起飞、各平台价格来回跳。这个工具把三件事固化成规则：
-
-1. **只比含税总价**：票价 + 机场建设费 + 燃油附加费，保险 / 付费行李 / 选座一律不算（默认不买）。
-2. **剔除阴间时段**：默认只保留 07:00–22:00 起飞的航班（可配置）。
-3. **3 天基线后自动判定**：跌破近 3 天最低价、低于 p10、或命中你设的硬上限，才发通知——不会被常态高价骚扰。
-
-## 快速开始
+## 30 秒上手
 
 ```bash
-# 依赖：Python 3.9+，仅标准库（无需 pip install）
-python run_cycle.py            # 跑一轮：采集 → 比价 → 生成 report/latest.md
-python run_cycle.py --fake     # 用内置样例验证管线（不联网）
-python _selftest.py <slug>     # 单独验证某个采集器
+# 一条命令盯任意航线（无需 pip install，只用 Python 标准库）
+python run_cycle.py --from 上海 --to 海口 --date 2026-12-16
+
+# 跑 config.json 里配置的所有航线
+python run_cycle.py
+
+# 不联网自检管线
+python run_cycle.py --fake
 ```
 
-结果看 `report/latest.md`：可订报价表 + 已剔除表（写明剔除原因）+ 采集失败表。
+结果在 `report/latest.md`：每条航线一张可订报价表 + 已剔除明细（写明原因）+ 采集失败明细 + 人工核价深链。
 
-Windows 每 2 小时自动跑一次：
+## 三个硬口径（默认值，都可改）
+
+| 口径 | 默认 | 为什么 |
+|---|---|---|
+| 只比含税总价 | 票价 + 机建(¥50) + 燃油 | 平台列表页标价不含税，光看标价会比出假便宜 |
+| 剔除阴间时段 | 只保留 07:00–22:00 起飞 | 红眼航班省的钱不够补打车和酒店 |
+| 默认不买保险/行李/选座 | 全部不计 | 这才是真实自付价；含行李的票价只在「行李」列标注，不参与比价 |
+
+再加上**3 天基线**：样本够 12 个后，只有跌破近 3 天最低价、或低于 p10、或命中你设的硬上限才提醒，不会被常态高价骚扰。
+
+## 城市怎么填
+
+内置 46 个国内城市（见 `cities.py`），直接写城市名，自动展开多机场：
+
+```bash
+python run_cycle.py --from 上海 --to 海口 --date 2026-12-16   # 上海 → SHA/PVG
+python run_cycle.py --from 北京 --to 三亚 --date 2027-01-20   # 北京 → PEK/PKX
+```
+
+不在表里的城市，直接给三字码：
+
+```bash
+python run_cycle.py --from 上海 --to 喀什 --from-code SHA --to-code KHG --date 2026-12-16
+```
+
+写错城市名会直接报错并列出已知城市，不会静默查错机场。
+
+## 同时盯多条航线
+
+```json
+"routes": [
+  { "from": "上海", "to": "海口", "date": "2026-12-16" },
+  { "from": "上海", "to": "三亚", "date": "2026-12-18" }
+]
+```
+
+数据库按航线隔离（`offers.route`），基线各算各的，互不污染。
+
+## 配置说明（`config.json`）
+
+| 键 | 作用 |
+|---|---|
+| `routes[]` | 要盯的航线列表 |
+| `filters.dep_time_window` | 可接受起飞时段，默认 `["07:00","22:00"]` |
+| `filters.require_direct` | 是否只要直飞，默认 `true` |
+| `filters.drop_flights_without_checked_baggage` | 是否直接剔除无免费行李的低成本航班，默认 `false` |
+| `fees.fallback_total_cny` | 采集器只拿到裸票价时的补算值（机建 50 + 燃油 20） |
+| `rule.new_low_margin` | 比近 3 天最低价再低多少元才提醒 |
+| `rule.hard_cap_cny` | 绝对上限，低于它就提醒（`null` = 不启用） |
+| `rule.notify_cooldown_hours` | 同价多久内不重复提醒 |
+| `manual_links[]` | 抓不到的平台的深链模板，渲染进报告供人工核价 |
+
+## 加一个采集平台
+
+往 `collectors/` 放一个文件，实现契约（见 `collectors/base.py`），框架自动发现，不用注册：
+
+```python
+PLATFORM = "example"
+
+def fetch(date, route):
+    # route = {from_city, to_city, from_codes, to_codes, date}
+    return [{
+        "platform": PLATFORM, "flight_no": "MU5305", "airline": "东方航空",
+        "dep_time": "07:35", "arr_time": "10:50",
+        "from_airport": "虹桥T2", "to_airport": "美兰T1",
+        "price": 620,            # 含机建+燃油的实付总价
+        "price_base": 550,       # 页面标价（可选，用于展示）
+        "stops": 0, "url": "https://...", "baggage": "含20kg托运",
+    }]
+```
+
+单测一个采集器：`python _selftest.py example 2026-12-16`
+
+## 平台支持状态
+
+| 渠道 | 采集器 | 状态 |
+|---|---|---|
+| 南方航空官网等 | `collectors/airlines.py` | 可用，返回真实含税价 |
+| 携程 | — | **被反爬封死**：航班 API 全路径族返回 432/430（whaleguard），真实浏览器同样被拦；报告里给深链人工核价 |
+| 同程旅行 / 去哪儿 / 飞猪 | 见仓库内 `collectors/` | 视当前版本而定，失败会在报告「采集失败」里明示 |
+
+抓不到就是抓不到：框架不会用假数据凑数，失败会逐条列进报告。
+
+## 自动跑（Windows）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File register_task.ps1
 ```
 
+注册每 2 小时一次的计划任务，结果写 `report/latest.md`，命中规则弹 Windows 通知并记 `data/alerts.log`。
+
+非 Windows：直接 cron 调 `python run_cycle.py`，通知会退化成控制台输出（`notify()` 里做了判断）。
+
 ## 目录结构
 
 ```
 flight-monitor/
-├── run_cycle.py           # 主流程：采集 → 归一化 → 过滤 → 入库 → 判定 → 报告 → 通知
-├── store.py               # SQLite 存储与基线统计（最低价 / p10 / 中位数）
-├── notify.ps1             # Windows toast 通知 + data/alerts.log 落盘
-├── config.json            # 航线、筛选口径、告警规则
+├── run_cycle.py        # 主流程：采集 → 归一化 → 过滤 → 入库 → 判定 → 报告 → 通知
+├── cities.py           # 城市名 → 三字码（46 城，可自行扩充）
+├── store.py            # SQLite，按航线+日期隔离的报价与基线
+├── notify.ps1          # Windows toast + data/alerts.log
+├── config.json         # 航线、筛选口径、告警规则、深链模板
 ├── collectors/
-│   ├── base.py            # 采集器契约（含税总价 / 字段校验 / 总价补算）
-│   └── <platform>.py      # 各平台采集器，框架自动发现
-├── _selftest.py           # 单个采集器的验收脚本
-├── 订票流程.md            # 可复用订票 SOP（含学生优惠认证路径）
-├── data/                  # prices.db / alerts.log（已 gitignore）
-└── report/                # latest.md（已 gitignore）
+│   ├── base.py         # 契约：字段校验 + 含税总价补算
+│   └── *.py            # 各平台采集器
+├── _selftest.py        # 单采集器验收
+├── 订票流程.md          # 订票 SOP（含学生优惠认证路径）
+├── data/ report/       # 运行时产物，已 gitignore
 ```
-
-## 配置（`config.json`）
-
-| 键 | 说明 |
-|---|---|
-| `route` | 出发/到达城市与三字码、出发日期 |
-| `filters.dep_time_window` | 可接受的起飞时间窗，默认 `[\"07:00\", \"22:00\"]` |
-| `filters.require_direct` | 是否只要直飞，默认 `true` |
-| `fees.fallback_total_cny` | 采集器拿不到税费时的补算值（机建 50 + 燃油 20） |
-| `rule.new_low_margin` | 比近 3 天最低价再低多少元才提醒 |
-| `rule.hard_cap_cny` | 绝对上限，低于它就提醒（`null` 表示不启用） |
-| `rule.notify_cooldown_hours` | 同一价格多久内不重复提醒 |
-
-换航线只改 `route`；加平台只往 `collectors/` 丢一个实现契约的 `.py`。
-
-## 采集器契约
-
-见 `collectors/base.py`。要点：
-
-- 只暴露 `PLATFORM` 与 `fetch(date, route) -> list[dict]`；
-- `price` 必须是**含机建 + 燃油的实付总价**；页面只给标价时，填 `price_base` 并设 `fees_included=False`；
-- 无人值守运行，不使用已登录的浏览器 profile，不依赖人工点击；
-- 单次 90 秒内结束，失败直接 raise（框架会记录并继续跑其他平台）。
-
-## 平台支持状态
-
-> 见下方「已知限制」。抓不到的平台不会静默失败：`report/latest.md` 的「采集失败」小节会列出平台与错误尾部。
-
-| 平台 | 采集器 | 状态 |
-|---|---|---|
-| 同程旅行 | `collectors/tongcheng.py` | 见 release notes |
-| 去哪儿 | `collectors/qunar.py` | 见 release notes |
-| 携程 | `collectors/ctrip.py` | 见 release notes |
-| 航司官网 | `collectors/airlines.py` | 见 release notes |
 
 ## 已知限制
 
-- OTA 有反爬（携程的 whaleguard 会直接拦截脚本请求），抓不到时请以深链人工核价；
-- 列表页价格与结算页可能不一致，下单前务必在结算页复核含税总价；
-- 价格数据仅用于个人比价，请遵守各平台服务条款，不要高频请求。
+- OTA 反爬普遍（携程最狠），自动化抓不到时以深链人工核价为准；
+- 列表价与结算价可能不一致，下单前必须在结算页复核含税总价；
+- 价格数据仅供个人比价，请遵守各平台服务条款，别高频请求；
+- 本项目不提供购票、代下单或支付能力。
 
-## 免责声明
+## License
 
-本项目仅供个人学习与比价使用，不提供任何购票、代下单或支付能力。作者不对价格准确性与可用性作任何保证。
+MIT
 

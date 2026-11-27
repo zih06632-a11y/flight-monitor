@@ -1,16 +1,11 @@
 {
-  "route": {
-    "from_city": "上海",
-    "to_city": "海口",
-    "from_codes": [
-      "SHA",
-      "PVG"
-    ],
-    "to_codes": [
-      "HAK"
-    ],
-    "date": "2026-12-16"
-  },
+  "routes": [
+    {
+      "from": "上海",
+      "to": "海口",
+      "date": "2026-12-16"
+    }
+  ],
   "filters": {
     "dep_time_window": [
       "07:00",
@@ -21,7 +16,7 @@
   },
   "fees": {
     "fallback_total_cny": 70,
-    "note": "仅当采集器标注 fees_included=false 时用于补算：机建约50 + 燃油约20"
+    "note": "只有采集器标注 fees_included=false 时才用它补算：机建约50 + 燃油约20"
   },
   "rule": {
     "baseline_days": 3,
@@ -31,5 +26,13 @@
   },
   "notify": {
     "toast": true
-  }
+  },
+  "manual_links": [
+    {
+      "name": "携程",
+      "reason": "whaleguard 对航班 API 全路径族返回 432/430，自动化无法取价",
+      "url": "https://flights.ctrip.com/online/list/oneway-{from_code_lc}-{to_code_lc}?depdate={date}&cabin=y_s&adult=1&child=0&infant=0",
+      "city_codes": "sha/pvg 均可"
+    }
+  ]
 }
