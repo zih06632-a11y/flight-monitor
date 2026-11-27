@@ -74,7 +74,7 @@ python run_cycle.py --from 上海 --to 喀什 --from-code SHA --to-code KHG --da
 python -m unittest discover -s tests -v    # 27 个用例，覆盖城市解析/含税口径/过滤/告警规则/存储隔离
 ```
 
-CI 在 GitHub Actions 上跑 Linux + Windows × Python 3.9/3.12（见 `.github/workflows/ci.yml`）。
+CI 在 GitHub Actions 上跑 Linux + Windows × Python 3.10/3.12（见 `.github/workflows/ci.yml`）。
 
 ## 配置说明（`config.json`）
 
