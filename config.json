@@ -1,0 +1,35 @@
+{
+  "route": {
+    "from_city": "上海",
+    "to_city": "海口",
+    "from_codes": [
+      "SHA",
+      "PVG"
+    ],
+    "to_codes": [
+      "HAK"
+    ],
+    "date": "2026-12-16"
+  },
+  "filters": {
+    "dep_time_window": [
+      "07:00",
+      "22:00"
+    ],
+    "require_direct": true,
+    "drop_flights_without_checked_baggage": false
+  },
+  "fees": {
+    "fallback_total_cny": 70,
+    "note": "仅当采集器标注 fees_included=false 时用于补算：机建约50 + 燃油约20"
+  },
+  "rule": {
+    "baseline_days": 3,
+    "new_low_margin": 30,
+    "hard_cap_cny": null,
+    "notify_cooldown_hours": 6
+  },
+  "notify": {
+    "toast": true
+  }
+}
