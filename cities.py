@@ -60,7 +60,9 @@ def resolve(name_or_code, explicit_code=None):
     if explicit_code:
         return [explicit_code.strip().upper()]
     text = str(name_or_code).strip()
-    if len(text) == 3 and text.isalpha():
+    # ASCII-only: "北京市".isalpha() is True in Python, so a plain isalpha() check would
+    # treat a 3-character Chinese city name as an IATA code.
+    if len(text) == 3 and text.isascii() and text.isalpha():
         return [text.upper()]
     key = text
     for suffix in ("市", "机场"):

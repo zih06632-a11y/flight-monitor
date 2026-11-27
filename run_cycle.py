@@ -76,6 +76,38 @@ def run_with_timeout(fn, args, timeout):
     return payload
 
 
+def run_collectors(collectors, date, payload, timeout, concurrency=3):
+    """Runs every collector concurrently, each bounded by `timeout` seconds total.
+
+    Daemon threads: a hung collector can never block process exit, and the scheduled
+    task's own ExecutionTimeLimit is the last line of defence.
+    """
+    results = {}
+    sem = threading.Semaphore(max(1, int(concurrency)))
+
+    def worker(platform, mod):
+        with sem:
+            try:
+                results[platform] = ("ok", mod.fetch(date, payload), None)
+            except Exception as exc:  # noqa: BLE001 - one platform must not sink the cycle
+                results[platform] = ("err", None, exc)
+
+    threads = [threading.Thread(target=worker, args=(p, m), daemon=True) for p, m in collectors]
+    for thread in threads:
+        thread.start()
+    deadline = time.time() + timeout
+    for thread in threads:
+        thread.join(max(0.1, deadline - time.time()))
+
+    out = []
+    for platform, _mod in collectors:
+        if platform in results:
+            out.append((platform,) + results[platform])
+        else:
+            out.append((platform, "err", None, TimeoutError("collector exceeded %ss" % timeout)))
+    return out
+
+
 def hhmm(text):
     try:
         parts = str(text).strip().split(":")
@@ -215,7 +247,9 @@ def route_section(route, rows, excluded, base, best, reasons, failures, cfg, lin
             lines.append("（页面标价 ¥%s，税费已补算）" % offer["price_base"])
         if reasons:
             lines.append("触发：" + "；".join(reasons))
-    elif rows:
+    elif not rows and not failures:
+        lines.append("**本轮没有可用采集器，或全部被 disabled_platforms 跳过。**")
+    else:
         lines.append("**本轮没有符合筛选条件的航班。**")
     if failures:
         lines += ["", "采集失败："] + ["- %s: %s" % (p, e.strip().splitlines()[-1][:150]) for p, e in failures]
@@ -291,24 +325,42 @@ def main():
             payload = {"from_city": route["from"], "to_city": route["to"],
                        "from_codes": route["from_codes"], "to_codes": route["to_codes"],
                        "date": route["date"]}
-            for platform, mod in collectors:
-                try:
-                    result = run_with_timeout(mod.fetch, (route["date"], payload), args.timeout)
-                    good = [cbase.validate(dict(o, platform=o.get("platform") or platform))
-                            for o in result]
+            concurrency = int(cfg.get("concurrency", 3))
+            for platform, kind, result, exc in run_collectors(collectors, route["date"], payload,
+                                                             args.timeout, concurrency):
+                if kind == "ok":
+                    try:
+                        good = [cbase.validate(dict(o, platform=o.get("platform") or platform))
+                                for o in result]
+                    except Exception as bad:
+                        failures.append((platform, str(bad)))
+                        store.record_run(ts, route["key"], platform, False, 0, str(bad))
+                        print("[fail] %s %s: invalid offer shape: %s" % (route["key"], platform, bad))
+                        continue
                     offers.extend(good)
                     store.record_run(ts, route["key"], platform, True, len(good))
                     print("[ok]   %s %s: %d offers" % (route["key"], platform, len(good)))
-                except Exception as exc:
+                else:
                     failures.append((platform, str(exc)))
                     store.record_run(ts, route["key"], platform, False, 0, str(exc))
-                    print("[fail] %s %s: %s" % (route["key"], platform, str(exc).splitlines()[0][:130]))
+                    print("[fail] %s %s: %s" % (route["key"], platform,
+                                               str(exc).splitlines()[0][:130]))
 
         observed_fee = derive_fee(offers)
         eff_fees = dict(fees_cfg)
+        fee_source = None
         if observed_fee:
             eff_fees["fallback_total_cny"] = observed_fee
-            print("[fee]    %s: 实测税费 ¥%s（用于补算只给票面价的平台）" % (route["key"], observed_fee))
+            fee_source = "本轮实测"
+            if not args.fake:
+                store.save_route_fee(route["key"], ts, observed_fee)
+        else:
+            remembered = store.get_route_fee(route["key"], now=ts)
+            if remembered:
+                eff_fees["fallback_total_cny"] = remembered[0]
+                fee_source = "历史实测" if remembered[1] else "历史报价回推"
+        print("[fee]    %s: 税费 ¥%s（%s）" % (route["key"], eff_fees["fallback_total_cny"],
+                                               fee_source or "默认估算"))
 
         rows, excluded = [], []
         for offer in offers:
@@ -316,7 +368,7 @@ def main():
             reasons = reject_reasons(offer, cfg)
             tags = []
             if not offer.get("fees_included", True):
-                tags.append("税费按%s补算 (¥%s)" % ("实测" if observed_fee else "默认估算", eff_fees["fallback_total_cny"]))
+                tags.append("税费按%s补算 (¥%s)" % (fee_source or "默认估算", eff_fees["fallback_total_cny"]))
             if offer.get("cross_midnight"):
                 tags.append("跨天到达")
             if tags:

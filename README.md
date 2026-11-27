@@ -57,6 +57,25 @@ python run_cycle.py --from 上海 --to 喀什 --from-code SHA --to-code KHG --da
 
 数据库按航线隔离（`offers.route`），基线各算各的，互不污染。
 
+## 命令行参数
+
+| 参数 | 说明 |
+|---|---|
+| `--from` / `--to` | 出发/到达城市名或三字码，覆盖 config 里的航线 |
+| `--date` | 出发日期 `YYYY-MM-DD`，对 config 里所有航线生效 |
+| `--from-code` / `--to-code` | 城市名不在内置表里时指定三字码 |
+| `--fake` | 用内置样例跑通管线，**不写数据库、不发通知** |
+| `--no-notify` | 只出报告，不弹通知 |
+| `--timeout` | 每个采集器的总超时秒数（默认 110） |
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v    # 27 个用例，覆盖城市解析/含税口径/过滤/告警规则/存储隔离
+```
+
+CI 在 GitHub Actions 上跑 Linux + Windows × Python 3.9/3.12（见 `.github/workflows/ci.yml`）。
+
 ## 配置说明（`config.json`）
 
 | 键 | 作用 |
@@ -65,7 +84,9 @@ python run_cycle.py --from 上海 --to 喀什 --from-code SHA --to-code KHG --da
 | `filters.dep_time_window` | 可接受起飞时段，默认 `["07:00","22:00"]` |
 | `filters.require_direct` | 是否只要直飞，默认 `true` |
 | `filters.drop_flights_without_checked_baggage` | 是否直接剔除无免费行李的低成本航班，默认 `false` |
-| `fees.fallback_total_cny` | 兜底补算值。**运行期会自校准**：只要本轮有任何平台给出真实税费（如南航官网），就用它的中位数补算只给票面价的平台，保证同一航线跨平台可比 |
+| `fees.fallback_total_cny` | 兜底值。税费按三级自愈取用：**本轮实测**（某平台同时给出标价与含税价）→ **历史报价回推**（从数据库里同类报价的差额还原）→ **默认估算**。所以某个平台临时挂了，其他平台的价格不会被低估 |
+| `concurrency` | 同时抓取的平台数，默认 3 |
+| `disabled_platforms` | 显式跳过的平台（需登录/已被封的），代码保留、本轮不跑、报告里给深链 |
 | `rule.new_low_margin` | 比近 3 天最低价再低多少元才提醒 |
 | `rule.hard_cap_cny` | 绝对上限，低于它就提醒（`null` = 不启用） |
 | `rule.notify_cooldown_hours` | 同价多久内不重复提醒 |
@@ -97,7 +118,7 @@ def fetch(date, route):
 | 渠道 | 采集器 | 状态 |
 |---|---|---|
 | 同程旅行 | `collectors/tongcheng.py` | **可用**：匿名 JSON 接口，单次 ~0.8s，返回票面价（接口无税费字段，由运行期自校准补算） |
-| 南方航空官网 | `collectors/airlines.py` | **可用**：过会话 + 阿里云 WAF 挑战，返回真实含税价（票价 + 机建 + 燃油） |
+| 南方航空官网 | `collectors/airlines.py` | 曾可用（返回真实含税价 = 票价 + 机建 50 + 燃油 140）；**2026-11-27 起 WAF 升级为新挑战 `aliyun_waf_aa/bb`，暂不可用**。它挂掉不影响价格准确性——税费从上一次实测值回推 |
 | 去哪儿 | `collectors/qunar.py` | **需登录**：搜索跳 `user.qunar.com` 登录墙，匿名一律空结果；默认在 `disabled_platforms` 中禁用，报告给深链 |
 | 携程 | — | **反爬封死**：航班 API 全路径族 432/430（whaleguard），真实浏览器同样被拦；报告给深链 |
 | 东航 / 吉祥 / 海航官网 | — | 未攻克：东航 CDN 风控 + 设备指纹，吉祥签名链路，海航老式 IBE 多步表单 |
