@@ -23,7 +23,8 @@
     "baseline_days": 3,
     "new_low_margin": 30,
     "hard_cap_cny": null,
-    "notify_cooldown_hours": 6
+    "notify_cooldown_hours": 6,
+    "min_history_hours": 24
   },
   "notify": {
     "toast": true

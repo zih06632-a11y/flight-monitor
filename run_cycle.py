@@ -183,7 +183,8 @@ def evaluate(rows, base, cfg):
     offer, eff = min(rows, key=lambda r: r[1])
     rule = cfg["rule"]
     reasons = []
-    if base["count"] >= 12:
+    min_hours = rule.get("min_history_hours", 24)
+    if base["count"] >= 12 and base.get("span_hours", 0) >= min_hours:
         if base["min"] is not None and eff <= base["min"] - rule["new_low_margin"]:
             reasons.append("新低（近%s天最低 ¥%s）" % (rule["baseline_days"], base["min"]))
         elif base["p10"] is not None and eff <= base["p10"]:

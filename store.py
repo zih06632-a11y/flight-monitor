@@ -71,18 +71,20 @@ def baseline(route_key, day, days=3, now=None):
     con = connect()
     cutoff = (now or 0) - days * 86400
     rows = con.execute(
-        "SELECT price FROM offers WHERE route=? AND day=? AND stops=0 AND platform!='selftest'"
-        " AND ts>=? ORDER BY price",
+        "SELECT price, ts FROM offers WHERE route=? AND day=? AND stops=0"
+        " AND platform!='selftest' AND ts>=? ORDER BY price",
         (route_key, day, cutoff)).fetchall()
     con.close()
     prices = [r[0] for r in rows]
     if not prices:
-        return {"count": 0, "min": None, "p10": None, "median": None}
+        return {"count": 0, "min": None, "p10": None, "median": None, "span_hours": 0.0}
+    stamps = [r[1] for r in rows]
     return {
         "count": len(prices),
         "min": prices[0],
         "p10": prices[max(0, int(len(prices) * 0.10) - 1)],
         "median": prices[len(prices) // 2],
+        "span_hours": round((max(stamps) - min(stamps)) / 3600.0, 1),
     }
 
 
