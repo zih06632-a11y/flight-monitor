@@ -29,6 +29,15 @@ from collectors import base as cbase  # noqa: E402
 COL_DIR = os.path.join(HERE, "collectors")
 REPORT_DIR = os.path.join(HERE, "report")
 
+# When a platform answers with a block instead of data, hammering it every cycle only
+# deepens the risk score. Back off instead: the site recovers on its own.
+BLOCK_MARKERS = ("验证码", "captcha", "waf", "403", "429", "forbidden", "blocked")
+
+
+def looks_blocked(error_text):
+    low = (error_text or "").lower()
+    return any(marker in low for marker in BLOCK_MARKERS)
+
 
 def load_config():
     with open(os.path.join(HERE, "config.json"), "r", encoding="utf-8") as f:
@@ -276,14 +285,18 @@ def route_section(route, rows, excluded, base, best, reasons, failures, cfg, lin
     return lines
 
 
-def notify(title, message):
+def notify(title, message, report_path=None):
     script = os.path.join(HERE, "notify.ps1")
     if os.name != "nt" or not os.path.exists(script):
         print("[alert] %s | %s" % (title, message))
         return
+    shown = ""
     try:
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
-                        "-Title", title, "-Message", message], timeout=30, check=False,
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
+               "-Title", title, "-Message", message]
+        if report_path:
+            cmd += ["-ReportPath", report_path]
+        subprocess.run(cmd, timeout=30, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as exc:
         print("[notify-fail] %s" % exc)
@@ -326,7 +339,17 @@ def main():
                        "from_codes": route["from_codes"], "to_codes": route["to_codes"],
                        "date": route["date"]}
             concurrency = int(cfg.get("concurrency", 3))
-            for platform, kind, result, exc in run_collectors(collectors, route["date"], payload,
+            cooldown_hours = cfg.get("blocked_cooldown_hours", 6)
+            active = []
+            for platform, mod in collectors:
+                prev = store.recent_failure(route["key"], platform, cooldown_hours, ts)
+                if prev and looks_blocked(prev[1]):
+                    age_h = (ts - prev[0]) / 3600.0
+                    print("[skip] %s %s: 冷却中（%.1fh 前被风控拦，冷却 %.0fh）"
+                          % (route["key"], platform, age_h, cooldown_hours))
+                    continue
+                active.append((platform, mod))
+            for platform, kind, result, exc in run_collectors(active, route["date"], payload,
                                                              args.timeout, concurrency):
                 if kind == "ok":
                     try:
@@ -409,7 +432,7 @@ def main():
                     eff, offer["flight_no"], offer["dep_time"], offer["arr_time"],
                     offer["from_airport"], offer["to_airport"], "；".join(reasons))
                 title = "机票提醒 %s→%s %s" % (route["from"], route["to"], route["date"])
-                notify(title, message)
+                notify(title, message, os.path.join(REPORT_DIR, "latest.md"))
                 store.mark_alert(ts, key, eff, message)
                 alerts.append(message)
 

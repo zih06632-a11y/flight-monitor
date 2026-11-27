@@ -44,5 +44,7 @@
   ],
   "disabled_platforms": [
     "qunar"
-  ]
+  ],
+  "blocked_cooldown_hours": 6,
+  "concurrency": 3
 }

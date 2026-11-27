@@ -91,6 +91,16 @@ def baseline(route_key, day, days=3, now=None):
     }
 
 
+def recent_failure(route_key, platform, hours, now):
+    """Last failed run for this platform, if it happened inside the window."""
+    con = connect()
+    row = con.execute(
+        "SELECT ts, error FROM runs WHERE route=? AND platform=? AND ok=0 AND ts>=?"
+        " ORDER BY ts DESC LIMIT 1", (route_key, platform, now - hours * 3600)).fetchone()
+    con.close()
+    return row
+
+
 def save_route_fee(route_key, ts, fee):
     """Remember the last taxes actually observed on this route.
 
