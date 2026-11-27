@@ -34,6 +34,14 @@
       "reason": "whaleguard 对航班 API 全路径族返回 432/430，自动化无法取价",
       "url": "https://flights.ctrip.com/online/list/oneway-{from_code_lc}-{to_code_lc}?depdate={date}&cabin=y_s&adult=1&child=0&infant=0",
       "city_codes": "sha/pvg 均可"
+    },
+    {
+      "name": "去哪儿",
+      "reason": "匿名会话被登录墙拦住（搜索跳 user.qunar.com 登录页），需登录后才能核价",
+      "url": "https://m.flight.qunar.com/ncs/page/flightlist?depCity={from_name}&arrCity={to_name}&goDate={date}&from=touch_index_search&child=0&baby=0&cabinType=0"
     }
+  ],
+  "disabled_platforms": [
+    "qunar"
   ]
 }

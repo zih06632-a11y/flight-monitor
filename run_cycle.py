@@ -35,7 +35,7 @@ def load_config():
         return json.load(f)
 
 
-def discover_collectors():
+def discover_collectors(disabled=()):
     mods = []
     for fname in sorted(os.listdir(COL_DIR)):
         if not fname.endswith(".py") or fname in ("__init__.py", "base.py") or fname.startswith("_"):
@@ -48,8 +48,12 @@ def discover_collectors():
         except Exception as exc:
             print("[load-fail] %s: %s" % (fname, exc))
             continue
-        if hasattr(mod, "fetch") and getattr(mod, "PLATFORM", None):
-            mods.append((mod.PLATFORM, mod))
+        platform = getattr(mod, "PLATFORM", None)
+        if hasattr(mod, "fetch") and platform:
+            if platform in disabled:
+                print("[skip] %s: disabled in config.json (disabled_platforms)" % platform)
+                continue
+            mods.append((platform, mod))
     return mods
 
 
@@ -154,6 +158,25 @@ def fake_offers():
     ]
 
 
+def derive_fee(offers):
+    """Observed all-in minus fare, from collectors that report real taxes.
+
+    Airport construction (50) and fuel surcharge are uniform per segment in mainland
+    China, so one platform's real taxes are the correct estimate for the whole route.
+    """
+    seen = []
+    for o in offers:
+        pb = o.get("price_base")
+        if o.get("fees_included", True) and isinstance(pb, int) and pb > 0:
+            delta = int(o["price"]) - pb
+            if 0 < delta < 500:
+                seen.append(delta)
+    if not seen:
+        return None
+    seen.sort()
+    return seen[len(seen) // 2]
+
+
 def evaluate(rows, base, cfg):
     if not rows:
         return None, []
@@ -251,7 +274,7 @@ def main():
     if args.fake:
         collectors = []
     else:
-        collectors = discover_collectors()
+        collectors = discover_collectors(set(cfg.get("disabled_platforms") or []))
         print("collectors: %s" % [p for p, _ in collectors])
 
     sections, alerts, summary = [], [], []
@@ -280,13 +303,19 @@ def main():
                     store.record_run(ts, route["key"], platform, False, 0, str(exc))
                     print("[fail] %s %s: %s" % (route["key"], platform, str(exc).splitlines()[0][:130]))
 
+        observed_fee = derive_fee(offers)
+        eff_fees = dict(fees_cfg)
+        if observed_fee:
+            eff_fees["fallback_total_cny"] = observed_fee
+            print("[fee]    %s: 实测税费 ¥%s（用于补算只给票面价的平台）" % (route["key"], observed_fee))
+
         rows, excluded = [], []
         for offer in offers:
-            eff = cbase.total_price(offer, fees_cfg)
+            eff = cbase.total_price(offer, eff_fees)
             reasons = reject_reasons(offer, cfg)
             tags = []
             if not offer.get("fees_included", True):
-                tags.append("税费按估算补算")
+                tags.append("税费按%s补算 (¥%s)" % ("实测" if observed_fee else "默认估算", eff_fees["fallback_total_cny"]))
             if offer.get("cross_midnight"):
                 tags.append("跨天到达")
             if tags:

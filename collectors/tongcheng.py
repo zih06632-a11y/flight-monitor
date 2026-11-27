@@ -13,6 +13,15 @@
     fn 航班号 dst/ast 起降时间 dasn/dat 出发机场/航站楼 aasn/aat 到达机场/航站楼
     asn 航司简称 nos 经停次数(缺省即 0) icsf 是否共享航班 sfd 实际承运航班号
     lps[] 各舱位最低价: dct==1 经济舱 / dct==2 公务舱, atp 票面价(不含机建燃油), brs[0].al 免费行李额kg
+
+税费结论（2026-08 实测，勿再重复挖）: 本接口不返回任何税费字段。
+    lps[] 全部字段: lpt ccid dct atp app not pts fs pin brs clct sp pa ms mts $label $betterTag
+    $showSingle $pts1 $pts1f $pts2 $pts2f $pts4 $rtsN7N25Str —— 只有 atp/sp(票面价) 与 app/pa(均为 0)，
+    整个响应递归穷举也无 tax/fee/aux/oil/amount 类 key（搜索 税|机建|燃油|tax|fuel 命中 0）。
+    加 pt=1/2、showTax、priceType、withTax 等参数也不改变 lps[] 结构。
+    真实税费只出现在下单页 (含机建燃油 = ticketPrice + ptOtAuxPrice)，而点开任意航班会被重定向到
+    https://m.ly.com/wxweb/#/allyLogin —— 匿名不可达。
+    因此这里 price=price_base=atp、fees_included=False，由框架按 config.fees 统一补算。
 """
 import datetime
 import json
@@ -130,7 +139,7 @@ def fetch(date: str, route: dict) -> list:
                 break
         if is_share:
             note_bits.append("共享航班")
-        note_bits.append("票面价+机建50+燃油")
+        note_bits.append("票面价（接口无税费字段）")
         offers.append({
             "platform": PLATFORM,
             "flight_no": f.get("fn", ""),

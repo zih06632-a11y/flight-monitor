@@ -65,7 +65,7 @@ python run_cycle.py --from 上海 --to 喀什 --from-code SHA --to-code KHG --da
 | `filters.dep_time_window` | 可接受起飞时段，默认 `["07:00","22:00"]` |
 | `filters.require_direct` | 是否只要直飞，默认 `true` |
 | `filters.drop_flights_without_checked_baggage` | 是否直接剔除无免费行李的低成本航班，默认 `false` |
-| `fees.fallback_total_cny` | 采集器只拿到裸票价时的补算值（机建 50 + 燃油 20） |
+| `fees.fallback_total_cny` | 兜底补算值。**运行期会自校准**：只要本轮有任何平台给出真实税费（如南航官网），就用它的中位数补算只给票面价的平台，保证同一航线跨平台可比 |
 | `rule.new_low_margin` | 比近 3 天最低价再低多少元才提醒 |
 | `rule.hard_cap_cny` | 绝对上限，低于它就提醒（`null` = 不启用） |
 | `rule.notify_cooldown_hours` | 同价多久内不重复提醒 |
@@ -96,9 +96,13 @@ def fetch(date, route):
 
 | 渠道 | 采集器 | 状态 |
 |---|---|---|
-| 南方航空官网等 | `collectors/airlines.py` | 可用，返回真实含税价 |
-| 携程 | — | **被反爬封死**：航班 API 全路径族返回 432/430（whaleguard），真实浏览器同样被拦；报告里给深链人工核价 |
-| 同程旅行 / 去哪儿 / 飞猪 | 见仓库内 `collectors/` | 视当前版本而定，失败会在报告「采集失败」里明示 |
+| 同程旅行 | `collectors/tongcheng.py` | **可用**：匿名 JSON 接口，单次 ~0.8s，返回票面价（接口无税费字段，由运行期自校准补算） |
+| 南方航空官网 | `collectors/airlines.py` | **可用**：过会话 + 阿里云 WAF 挑战，返回真实含税价（票价 + 机建 + 燃油） |
+| 去哪儿 | `collectors/qunar.py` | **需登录**：搜索跳 `user.qunar.com` 登录墙，匿名一律空结果；默认在 `disabled_platforms` 中禁用，报告给深链 |
+| 携程 | — | **反爬封死**：航班 API 全路径族 432/430（whaleguard），真实浏览器同样被拦；报告给深链 |
+| 东航 / 吉祥 / 海航官网 | — | 未攻克：东航 CDN 风控 + 设备指纹，吉祥签名链路，海航老式 IBE 多步表单 |
+
+`disabled_platforms` 是显式开关：某平台需要登录或被封时，代码留着、本轮跳过，不会每个周期刷一堆失败。
 
 抓不到就是抓不到：框架不会用假数据凑数，失败会逐条列进报告。
 
