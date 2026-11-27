@@ -181,6 +181,14 @@ flight-monitor/
 | `bark` | Bark 的 key 或完整地址 |
 | `custom` | 任意接收 `{"title","message"}` 的地址 |
 
+私有 key 建议放 `config.local.json`（已 gitignore，会深度合并覆盖 `config.json`）：
+
+```json
+{ "notify": { "webhook_type": "serverchan", "webhook_url": "@C:/Users/me/sct.key", "max_pushes_per_day": 4 } }
+```
+
+`max_pushes_per_day` 是每日推送上限（Server 酱免费版每天 5 条），超了就只写日志不再推送。
+
 配好后自测一条：
 
 ```bash

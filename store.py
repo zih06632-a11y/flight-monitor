@@ -154,6 +154,13 @@ def alerted_recently(key, hours, now):
     return row is not None
 
 
+def alerts_in_last_day(ts):
+    con = connect()
+    n = con.execute("SELECT COUNT(*) FROM alerts WHERE ts>=?", (ts - 86400,)).fetchone()[0]
+    con.close()
+    return int(n)
+
+
 def mark_alert(ts, key, price, message):
     con = connect()
     con.execute("INSERT INTO alerts (ts, key, price, message) VALUES (?,?,?,?)",

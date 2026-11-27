@@ -39,9 +39,24 @@ def looks_blocked(error_text):
     return any(marker in low for marker in BLOCK_MARKERS)
 
 
+def _merge(base, override):
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def load_config():
+    """config.json plus an optional config.local.json (gitignored) for private keys."""
     with open(os.path.join(HERE, "config.json"), "r", encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    local = os.path.join(HERE, "config.local.json")
+    if os.path.exists(local):
+        with open(local, "r", encoding="utf-8") as f:
+            _merge(cfg, json.load(f))
+    return cfg
 
 
 def discover_collectors(disabled=()):
@@ -482,7 +497,10 @@ def main():
         if best and reasons and not args.no_notify and not args.fake:
             offer, eff = best
             key = "%s:%s:%s:%s" % (route["key"], route["date"], offer["flight_no"], eff)
-            if store.alerted_recently(key, cfg["rule"]["notify_cooldown_hours"], ts):
+            max_per_day = int((cfg.get("notify") or {}).get("max_pushes_per_day") or 0)
+            if max_per_day and store.alerts_in_last_day(ts) >= max_per_day:
+                print("alert suppressed: daily push budget %d already used" % max_per_day)
+            elif store.alerted_recently(key, cfg["rule"]["notify_cooldown_hours"], ts):
                 print("alert suppressed by cooldown")
             else:
                 message = "¥%s 含税 %s %s-%s %s→%s｜%s｜不含保险与托运行李" % (
