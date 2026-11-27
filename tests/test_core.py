@@ -168,5 +168,32 @@ class TestStore(unittest.TestCase):
         self.assertEqual(store.baseline("PEK-SYX", "2026-12-16", 3, now=2000)["min"], 3000)
 
 
+class TestWebhook(unittest.TestCase):
+    def test_wecom_payload_shape(self):
+        p = run_cycle.webhook_payload("wecom", "t", "m")
+        self.assertEqual(p["msgtype"], "text")
+        self.assertIn("m", p["text"]["content"])
+
+    def test_serverchan_payload_shape(self):
+        p = run_cycle.webhook_payload("serverchan", "t", "m")
+        self.assertEqual(p["title"], "t")
+        self.assertEqual(p["desp"], "m")
+
+    def test_custom_payload_shape(self):
+        p = run_cycle.webhook_payload("custom", "t", "m")
+        self.assertEqual(p, {"title": "t", "message": "m"})
+
+    def test_no_webhook_is_not_an_error(self):
+        ok, detail = run_cycle.push_webhook({"notify": {"webhook_url": ""}}, "t", "m")
+        self.assertFalse(ok)
+        self.assertIn("no webhook", detail)
+
+    def test_unreachable_webhook_fails_softly(self):
+        ok, detail = run_cycle.push_webhook(
+            {"notify": {"webhook_url": "http://127.0.0.1:9/none", "webhook_type": "custom"}}, "t", "m")
+        self.assertFalse(ok)
+        self.assertTrue(detail)
+
+
 if __name__ == "__main__":
     unittest.main()

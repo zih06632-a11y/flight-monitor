@@ -285,6 +285,37 @@ def route_section(route, rows, excluded, base, best, reasons, failures, cfg, lin
     return lines
 
 
+def webhook_payload(kind, title, message):
+    """Payload for the push channel. kind: wecom | serverchan | bark | custom."""
+    if kind == "wecom":
+        return {"msgtype": "text", "text": {"content": title + "\n" + message}}
+    if kind == "serverchan":
+        return {"title": title, "desp": message}
+    if kind == "bark":
+        return {"title": title, "body": message}
+    return {"title": title, "message": message}
+
+
+def push_webhook(cfg, title, message, ts=None):
+    """Posts to the configured webhook. Returns (ok, detail); never raises."""
+    import urllib.error
+    import urllib.request
+
+    notify_cfg = cfg.get("notify") or {}
+    url = (notify_cfg.get("webhook_url") or "").strip()
+    if not url:
+        return False, "no webhook configured"
+    kind = notify_cfg.get("webhook_type", "custom")
+    body = json.dumps(webhook_payload(kind, title, message)).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return True, "http %s" % resp.status
+    except Exception as exc:
+        return False, str(exc)[:160]
+
+
 def notify(title, message, report_path=None):
     script = os.path.join(HERE, "notify.ps1")
     if os.name != "nt" or not os.path.exists(script):
@@ -433,6 +464,8 @@ def main():
                     offer["from_airport"], offer["to_airport"], "；".join(reasons))
                 title = "机票提醒 %s→%s %s" % (route["from"], route["to"], route["date"])
                 notify(title, message, os.path.join(REPORT_DIR, "latest.md"))
+                ok_push, detail = push_webhook(cfg, title, message, ts)
+                print("[push]   %s: %s" % ("sent" if ok_push else "skipped/failed", detail))
                 store.mark_alert(ts, key, eff, message)
                 alerts.append(message)
 

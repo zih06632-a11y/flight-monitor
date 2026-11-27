@@ -27,7 +27,9 @@
     "min_history_hours": 24
   },
   "notify": {
-    "toast": true
+    "toast": true,
+    "webhook_url": "",
+    "webhook_type": "custom"
   },
   "manual_links": [
     {
