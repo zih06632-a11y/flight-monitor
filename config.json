@@ -12,7 +12,8 @@
       "22:00"
     ],
     "require_direct": true,
-    "drop_flights_without_checked_baggage": false
+    "drop_flights_without_checked_baggage": false,
+    "drop_cross_midnight": false
   },
   "fees": {
     "fallback_total_cny": 70,

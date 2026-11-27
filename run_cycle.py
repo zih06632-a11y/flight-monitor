@@ -126,6 +126,11 @@ def reject_reasons(offer, cfg):
         reasons.append("起飞 %s 不在可接受时段 %s-%s" % (offer["dep_time"], lo, hi))
     if f.get("drop_flights_without_checked_baggage") and "无免费" in (offer.get("baggage") or ""):
         reasons.append("无免费托运行李")
+    dep, arr = hhmm(offer.get("dep_time", "")), hhmm(offer.get("arr_time", ""))
+    if dep is not None and arr is not None and arr < dep:
+        offer["cross_midnight"] = True
+        if f.get("drop_cross_midnight"):
+            reasons.append("跨天到达（%s）" % offer["arr_time"])
     return reasons
 
 
@@ -279,6 +284,13 @@ def main():
         for offer in offers:
             eff = cbase.total_price(offer, fees_cfg)
             reasons = reject_reasons(offer, cfg)
+            tags = []
+            if not offer.get("fees_included", True):
+                tags.append("税费按估算补算")
+            if offer.get("cross_midnight"):
+                tags.append("跨天到达")
+            if tags:
+                offer["note"] = (offer.get("note", "") + "｜" + "｜".join(tags)).lstrip("｜")
             if reasons:
                 excluded.append((offer, eff, "；".join(reasons)))
             else:
