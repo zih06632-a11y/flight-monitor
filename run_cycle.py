@@ -302,16 +302,32 @@ def push_webhook(cfg, title, message, ts=None):
     import urllib.request
 
     notify_cfg = cfg.get("notify") or {}
+    kind = notify_cfg.get("webhook_type", "custom")
     url = (notify_cfg.get("webhook_url") or "").strip()
+    if url.startswith("@"):  # key kept outside the repo, e.g. "@C:/Users/me/sct-key.txt"
+        try:
+            with open(os.path.expanduser(url[1:].strip()), "r", encoding="utf-8") as f:
+                url = f.read().strip()
+        except OSError as exc:
+            return False, "cannot read key file: %s" % exc
     if not url:
         return False, "no webhook configured"
-    kind = notify_cfg.get("webhook_type", "custom")
+    # Server Chan accepts a bare SendKey; build the endpoint for the user so a key is enough.
+    if kind == "serverchan" and not url.lower().startswith("http"):
+        url = "https://sctapi.ftqq.com/%s.send" % url.strip("/")
     body = json.dumps(webhook_payload(kind, title, message)).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json"})
+    # Domestic push endpoints (Server Chan, WeCom) are reached directly; sending them
+    # through a VPN exit only adds latency and failure modes.
+    if notify_cfg.get("webhook_via_proxy"):
+        opener = urllib.request.build_opener()
+    else:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return True, "http %s" % resp.status
+        with opener.open(req, timeout=20) as resp:
+            detail = resp.read().decode("utf-8", "replace")[:120]
+            return True, "http %s %s" % (resp.status, detail)
     except Exception as exc:
         return False, str(exc)[:160]
 
@@ -343,9 +359,19 @@ def main():
     ap.add_argument("--fake", action="store_true", help="selftest with built-in offers")
     ap.add_argument("--no-notify", action="store_true")
     ap.add_argument("--timeout", type=int, default=110)
+    ap.add_argument("--test-webhook", action="store_true",
+                    help="send one test push and exit")
     args = ap.parse_args()
 
     cfg = load_config()
+    if args.test_webhook:
+        ok, detail = push_webhook(
+            cfg,
+            "flight-monitor 推送测试",
+            "收到这条说明降价提醒可以推到你的手机了。当前航线 %s→%s %s。" % (
+                cfg["routes"][0]["from"], cfg["routes"][0]["to"], cfg["routes"][0]["date"]))
+        print("[test-webhook] %s: %s" % ("OK" if ok else "FAILED", detail))
+        return 0 if ok else 1
     routes = build_routes(cfg, args)
     fees_cfg = cfg["fees"]
     ts = int(time.time())

@@ -163,7 +163,30 @@ flight-monitor/
 - 价格数据仅供个人比价，请遵守各平台服务条款，别高频请求；
 - 本项目不提供购票、代下单或支付能力。
 
+## 手机推送（可选）
+
+默认提醒落在 `data/alerts.log` 与报告里。想推到手机就配 `config.json` 的 `notify`：
+
+```json
+"notify": {
+  "webhook_type": "serverchan",
+  "webhook_url": "SCTxxxxx"            // 只填 SendKey；也支持 "@C:/path/key.txt" 存到文件外
+}
+```
+
+| webhook_type | 需要填什么 |
+|---|---|
+| `serverchan` | Server 酱 SendKey（https://sct.ftqq.com/ 微信扫码取） |
+| `wecom` | 企业微信群机器人 Webhook 完整地址 |
+| `bark` | Bark 的 key 或完整地址 |
+| `custom` | 任意接收 `{"title","message"}` 的地址 |
+
+配好后自测一条：
+
+```bash
+python run_cycle.py --test-webhook
+```
+
 ## License
 
 MIT
-

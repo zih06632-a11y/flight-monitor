@@ -28,8 +28,9 @@
   },
   "notify": {
     "toast": true,
+    "webhook_type": "serverchan",
     "webhook_url": "",
-    "webhook_type": "custom"
+    "webhook_via_proxy": false
   },
   "manual_links": [
     {
